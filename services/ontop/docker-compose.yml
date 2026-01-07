@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  ontop:
+    image: ontop/ontop
+    container_name: make-r2rml-ontop
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/opt/ontop/config
+    environment:
+      - ONTOP_PROPERTIES=/opt/ontop/config/ontop.properties

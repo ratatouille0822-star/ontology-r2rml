@@ -1,0 +1,5 @@
+# Ontop 演示配置（编辑后重命名为 ontop.properties）
+# jdbc.url=jdbc:postgresql://host:5432/db
+# jdbc.user=your_user
+# jdbc.password=your_password
+# mapping.file=/opt/ontop/config/mapping.ttl
