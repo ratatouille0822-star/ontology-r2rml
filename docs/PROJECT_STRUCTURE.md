@@ -27,6 +27,9 @@ make-r2rml/
 |       |-- README.md
 |       |-- docker-compose.yml
 |       `-- config/
+|-- SKILLS/
+|   `-- r2rml/
+|       `-- SKILL.md
 |-- data/
 |   |-- tbox/
 |   |-- samples/
@@ -44,6 +47,7 @@ make-r2rml/
 - `backend/`：Python 后端与智能体实现。
 - `backend/app/agents/`：OpenAI Agents 框架与 R2RML Skill 的实现入口。
 - `services/ontop/`：本地 Ontop 服务（Demo 用）。
+- `SKILLS/`：技能目录（R2RML 匹配技能说明）。
 - `data/`：样例数据与产物缓存目录。
 - `mock/`：本地模型与 CSV 样例目录（不入库）。
 - `.env.example`：模型与数据库连接配置模板（不含真实密钥）。

@@ -93,6 +93,7 @@ h1 {
   flex-direction: column;
   gap: 16px;
   animation: rise 0.6s ease;
+  min-width: 0;
 }
 
 .card.wide {
@@ -202,6 +203,36 @@ button.ghost {
 
 .list small {
   color: var(--muted);
+  word-break: break-all;
+}
+
+.class-group {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fbfbf9;
+  display: grid;
+  gap: 8px;
+}
+
+.class-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.class-items {
+  display: grid;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.class-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .mono {
@@ -242,6 +273,18 @@ button.ghost {
   justify-content: space-between;
 }
 
+.slider label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.slider input[type='range'] {
+  width: 200px;
+}
+
 .mode {
   display: flex;
   align-items: center;
@@ -268,6 +311,12 @@ button.ghost {
   align-items: center;
   border-bottom: 1px solid var(--line);
   padding-bottom: 8px;
+  min-width: 0;
+}
+
+.table .row.grid-4 {
+  grid-template-columns: 1.6fr 1fr 1.2fr 0.4fr;
+  align-items: start;
 }
 
 .table .row.head {
@@ -276,6 +325,48 @@ button.ghost {
   letter-spacing: 0.1em;
   color: var(--muted);
   border-bottom: none;
+}
+
+.table .row > * {
+  min-width: 0;
+}
+
+.table .cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.table .cell small {
+  word-break: break-all;
+}
+
+.group-block {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.group-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.field-select {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.table select,
+.field-select select {
+  width: 100%;
 }
 
 .output {
@@ -308,6 +399,21 @@ button.ghost {
   overflow-x: auto;
 }
 
+.preview label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+.preview-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .preview table {
   width: 100%;
   border-collapse: collapse;
@@ -332,6 +438,7 @@ button.ghost {
   padding: 8px 10px;
   border-radius: 10px;
   background: #f7f7f3;
+  overflow-wrap: anywhere;
 }
 
 .checkbox {
@@ -340,6 +447,12 @@ button.ghost {
   gap: 8px;
   font-size: 12px;
   color: var(--muted);
+}
+
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .footer {
@@ -375,9 +488,17 @@ button.ghost {
     grid-template-columns: 1fr;
   }
 
+  .table .row.grid-4 {
+    grid-template-columns: 1fr;
+  }
+
   .actions {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .slider input[type='range'] {
+    width: 100%;
   }
 
   .field {

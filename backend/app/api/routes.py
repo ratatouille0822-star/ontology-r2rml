@@ -38,12 +38,11 @@ async def data_parse(files: list[UploadFile] = File(...)):
             content = await file.read()
             file_items.append((file.filename or "", content))
 
-        columns, sample_rows, all_rows = parse_tabular_files(file_items)
+        tables = parse_tabular_files(file_items)
         return {
-            "columns": columns,
-            "sample_rows": sample_rows,
-            "rows": all_rows,
+            "tables": tables,
             "file_count": len(files),
+            "table_count": len(tables),
         }
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -51,7 +50,7 @@ async def data_parse(files: list[UploadFile] = File(...)):
 
 @router.post("/match", response_model=MatchResponse)
 async def match_fields(payload: MatchRequest):
-    matches = agent.match(payload.fields, payload.properties, payload.mode)
+    matches = agent.match(payload.properties, payload.tables, payload.mode, payload.threshold)
     return MatchResponse(matches=matches)
 
 
@@ -60,7 +59,7 @@ async def abox_generate(payload: AboxRequest):
     try:
         data_dir = get_setting("DATA_DIR", "./data")
         output_dir = str(Path(data_dir) / "abox")
-        content, file_path = generate_abox(payload.rows, payload.mapping, payload.base_iri, output_dir)
+        content, file_path = generate_abox(payload.tables, payload.mapping, payload.base_iri, output_dir)
         return {"format": "turtle", "content": content, "file_path": file_path}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

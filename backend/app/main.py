@@ -3,9 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 from app.api.routes import router
+from app.utils.logging import configure_logging
 from app.utils.version import BACKEND_VERSION
 
 load_dotenv()
+configure_logging()
 
 app = FastAPI(title="R2RML Demo API", version=BACKEND_VERSION)
 

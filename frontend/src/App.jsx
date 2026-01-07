@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
-const FRONTEND_VERSION = 'v0.1.0-内测';
+const FRONTEND_VERSION = 'v0.1.3-内测';
 const emptyOutput = { format: '', content: '', filePath: '' };
 
 const formatScore = (value) => {
@@ -10,15 +10,17 @@ const formatScore = (value) => {
 
 export default function App() {
   const [tboxFile, setTboxFile] = useState(null);
-  const [tboxProps, setTboxProps] = useState([]);
+  const [tboxAllProps, setTboxAllProps] = useState([]);
+  const [leafOnly, setLeafOnly] = useState(false);
   const [dataFiles, setDataFiles] = useState([]);
   const [directoryMode, setDirectoryMode] = useState(false);
-  const [fields, setFields] = useState([]);
-  const [sampleRows, setSampleRows] = useState([]);
-  const [allRows, setAllRows] = useState([]);
+  const [tables, setTables] = useState([]);
   const [fileCount, setFileCount] = useState(0);
+  const [tableCount, setTableCount] = useState(0);
+  const [previewTable, setPreviewTable] = useState('');
   const [matches, setMatches] = useState([]);
   const [matchMode, setMatchMode] = useState('llm');
+  const [confidence, setConfidence] = useState(50);
   const [output, setOutput] = useState(emptyOutput);
   const [status, setStatus] = useState('');
   const [sourceType, setSourceType] = useState('file');
@@ -27,12 +29,62 @@ export default function App() {
   const [backendVersion, setBackendVersion] = useState('未连接');
   const [busy, setBusy] = useState(false);
 
-  const propertyOptions = useMemo(() => tboxProps, [tboxProps]);
+  const fieldCount = useMemo(() => {
+    const set = new Set();
+    tables.forEach((table) => {
+      (table.fields || []).forEach((field) => set.add(field));
+    });
+    return set.size;
+  }, [tables]);
+
+  const leafCount = useMemo(() => {
+    return tboxAllProps.filter((prop) => prop.is_leaf).length;
+  }, [tboxAllProps]);
+
+  const tboxProps = useMemo(() => {
+    if (!leafOnly) return tboxAllProps;
+    return tboxAllProps.filter((prop) => prop.is_leaf);
+  }, [tboxAllProps, leafOnly]);
+
+  const groupedProps = useMemo(() => {
+    const groups = new Map();
+    tboxProps.forEach((prop) => {
+      const domain = prop.domains && prop.domains.length ? prop.domains[0] : null;
+      const className = domain?.label || domain?.local_name || domain?.iri || '未指定类';
+      const classKey = domain?.iri || className;
+      if (!groups.has(classKey)) {
+        groups.set(classKey, { className, classIri: domain?.iri || '', properties: [] });
+      }
+      groups.get(classKey).properties.push(prop);
+    });
+    return Array.from(groups.values());
+  }, [tboxProps]);
+
+  const groupedMatches = useMemo(() => {
+    const matchMap = new Map(matches.map((item) => [item.property_iri, item]));
+    return groupedProps.map((group) => ({
+      ...group,
+      items: group.properties.map((prop) => {
+        const match = matchMap.get(prop.iri);
+        return {
+          property_iri: prop.iri,
+          property_label: prop.label || prop.local_name,
+          table_name: match?.table_name || '',
+          field: match?.field || '',
+          score: match?.score ?? null
+        };
+      })
+    }));
+  }, [groupedProps, matches]);
 
   const mappingPayload = useMemo(() => {
     return matches
-      .filter((item) => item.property_iri)
-      .map((item) => ({ field: item.field, property_iri: item.property_iri }));
+      .filter((item) => item.table_name && item.field)
+      .map((item) => ({
+        table_name: item.table_name,
+        field: item.field,
+        property_iri: item.property_iri
+      }));
   }, [matches]);
 
   const fileListLabel = useMemo(() => {
@@ -43,6 +95,16 @@ export default function App() {
       .join('、');
     return dataFiles.length > 3 ? `${names} 等 ${dataFiles.length} 个文件` : names;
   }, [dataFiles]);
+
+  const previewTableInfo = useMemo(() => {
+    return tables.find((table) => table.name === previewTable) || null;
+  }, [tables, previewTable]);
+
+  useEffect(() => {
+    if (!previewTable && tables.length) {
+      setPreviewTable(tables[0].name);
+    }
+  }, [tables, previewTable]);
 
   useEffect(() => {
     const fetchVersion = async () => {
@@ -57,6 +119,22 @@ export default function App() {
     };
     fetchVersion();
   }, []);
+
+  useEffect(() => {
+    if (!tboxProps.length) {
+      setMatches([]);
+      return;
+    }
+    setMatches(
+      tboxProps.map((prop) => ({
+        property_iri: prop.iri,
+        property_label: prop.label || prop.local_name,
+        table_name: '',
+        field: '',
+        score: null
+      }))
+    );
+  }, [tboxProps]);
 
   const handleStatus = (message) => {
     setStatus(message);
@@ -79,7 +157,7 @@ export default function App() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'TBox 解析失败');
-      setTboxProps(data.properties || []);
+      setTboxAllProps(data.properties || []);
       handleStatus(`已解析 TBox：${data.properties?.length || 0} 个数据属性`);
     } catch (error) {
       handleStatus(error.message);
@@ -107,11 +185,18 @@ export default function App() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '数据解析失败');
-      setFields(data.columns || []);
-      setSampleRows(data.sample_rows || []);
-      setAllRows(data.rows || []);
+      const nextTables = data.tables || [];
+      const nextTableCount = data.table_count || nextTables.length;
+      const nextFieldCount = new Set(
+        nextTables.flatMap((table) => table.fields || [])
+      ).size;
+      setTables(nextTables);
       setFileCount(data.file_count || dataFiles.length);
-      handleStatus(`已解析字段：${data.columns?.length || 0}，文件数：${data.file_count || dataFiles.length}`);
+      setTableCount(nextTableCount);
+      setMatches((prev) =>
+        prev.map((item) => ({ ...item, table_name: '', field: '', score: null }))
+      );
+      handleStatus(`已解析表：${nextTableCount}，字段数：${nextFieldCount}`);
     } catch (error) {
       handleStatus(error.message);
     } finally {
@@ -120,7 +205,7 @@ export default function App() {
   };
 
   const runMatch = async () => {
-    if (!fields.length || !tboxProps.length) {
+    if (!tables.length || !tboxProps.length) {
       handleStatus('请先完成 TBox 与数据解析');
       return;
     }
@@ -129,7 +214,12 @@ export default function App() {
       const response = await fetch('/api/match', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fields, properties: tboxProps, mode: matchMode })
+        body: JSON.stringify({
+          properties: tboxProps,
+          tables,
+          mode: matchMode,
+          threshold: confidence / 100
+        })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || '匹配失败');
@@ -142,16 +232,25 @@ export default function App() {
     }
   };
 
-  const updateMatch = (field, propertyIri) => {
+  const updateTableSelection = (propertyIri, tableNameValue) => {
+    setMatches((prev) =>
+      prev.map((item) => {
+        if (item.property_iri !== propertyIri) return item;
+        return { ...item, table_name: tableNameValue, field: '' };
+      })
+    );
+  };
+
+  const updateFieldSelection = (propertyIri, fieldValue) => {
     setMatches((prev) =>
       prev.map((item) =>
-        item.field === field ? { ...item, property_iri: propertyIri } : item
+        item.property_iri === propertyIri ? { ...item, field: fieldValue } : item
       )
     );
   };
 
   const generateAbox = async () => {
-    if (!mappingPayload.length || !allRows.length) {
+    if (!mappingPayload.length || !tables.length) {
       handleStatus('请先完成匹配并确保有数据');
       return;
     }
@@ -160,7 +259,7 @@ export default function App() {
       const response = await fetch('/api/abox', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rows: allRows, mapping: mappingPayload })
+        body: JSON.stringify({ tables, mapping: mappingPayload })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'ABox 生成失败');
@@ -200,10 +299,9 @@ export default function App() {
     setTboxFile(null);
     setTboxProps([]);
     setDataFiles([]);
-    setFields([]);
-    setSampleRows([]);
-    setAllRows([]);
+    setTables([]);
     setFileCount(0);
+    setTableCount(0);
     setMatches([]);
     setOutput(emptyOutput);
     setStatus('');
@@ -248,14 +346,36 @@ export default function App() {
             <span>已识别属性</span>
             <strong>{tboxProps.length}</strong>
           </div>
+          <div className="filter-row">
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={leafOnly}
+                onChange={(event) => setLeafOnly(event.target.checked)}
+              />
+              只显示叶子属性（{leafCount} / {tboxAllProps.length}）
+            </label>
+          </div>
           <div className="list">
-            {tboxProps.slice(0, 6).map((prop) => (
-              <div key={prop.iri}>
-                <p className="mono">{prop.label || prop.local_name}</p>
-                <small>{prop.iri}</small>
+            {groupedProps.map((group) => (
+              <div key={group.classIri || group.className} className="class-group">
+                <div className="class-title">
+                  <span className="mono">{group.className}</span>
+                  {group.classIri ? <small>{group.classIri}</small> : null}
+                </div>
+                <div className="class-items">
+                  {group.properties.slice(0, 6).map((prop) => (
+                    <div key={prop.iri} className="class-item">
+                      <span>{prop.label || prop.local_name}</span>
+                    </div>
+                  ))}
+                  {group.properties.length > 6 && (
+                    <small>还有 {group.properties.length - 6} 个属性未展示</small>
+                  )}
+                </div>
               </div>
             ))}
-            {!tboxProps.length && <small>等待上传解析</small>}
+            {!groupedProps.length && <small>等待上传解析</small>}
           </div>
         </article>
 
@@ -339,8 +459,12 @@ export default function App() {
           )}
 
           <div className="summary">
+            <span>表数量</span>
+            <strong>{tableCount}</strong>
+          </div>
+          <div className="summary">
             <span>字段数量</span>
-            <strong>{fields.length}</strong>
+            <strong>{fieldCount}</strong>
           </div>
           <div className="summary">
             <span>文件数量</span>
@@ -348,12 +472,13 @@ export default function App() {
           </div>
 
           <div className="list">
-            {fields.slice(0, 6).map((field) => (
-              <div key={field}>
-                <p className="mono">{field}</p>
+            {tables.slice(0, 4).map((table) => (
+              <div key={table.name}>
+                <p className="mono">{table.name}</p>
+                <small>{(table.fields || []).length} 个字段</small>
               </div>
             ))}
-            {!fields.length && <small>等待数据源解析</small>}
+            {!tables.length && <small>等待数据源解析</small>}
           </div>
         </article>
 
@@ -372,34 +497,81 @@ export default function App() {
                 </select>
               </label>
             </div>
+            <div className="slider">
+              <label>
+                置信度阈值：{confidence}%
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={confidence}
+                  onChange={(event) => setConfidence(Number(event.target.value))}
+                />
+              </label>
+            </div>
             <button onClick={runMatch} disabled={busy}>
               生成匹配
             </button>
           </div>
           <div className="table">
-            <div className="row head">
+            <div className="row head grid-4">
+              <span>属性</span>
+              <span>表</span>
               <span>字段</span>
-              <span>匹配属性</span>
               <span>置信度</span>
             </div>
-            {matches.map((item) => (
-              <div key={item.field} className="row">
-                <span className="mono">{item.field}</span>
-                <select
-                  value={item.property_iri || ''}
-                  onChange={(event) => updateMatch(item.field, event.target.value)}
-                >
-                  <option value="">-- 请选择属性 --</option>
-                  {propertyOptions.map((prop) => (
-                    <option key={prop.iri} value={prop.iri}>
-                      {prop.label || prop.local_name}
-                    </option>
-                  ))}
-                </select>
-                <span>{formatScore(item.score)}</span>
+            {groupedMatches.map((group) => (
+              <div key={group.classIri || group.className} className="group-block">
+                <div className="group-header">
+                  <span>类：{group.className}</span>
+                  {group.classIri ? <small>{group.classIri}</small> : null}
+                </div>
+                {group.items.map((item) => {
+                  const tableInfo = tables.find((table) => table.name === item.table_name);
+                  const fields = tableInfo ? tableInfo.fields || [] : [];
+                  return (
+                    <div key={item.property_iri} className="row grid-4">
+                      <div className="cell">
+                        <span className="mono">{item.property_label || item.property_iri}</span>
+                        <small>{item.property_iri}</small>
+                      </div>
+                      <select
+                        value={item.table_name || ''}
+                        onChange={(event) => updateTableSelection(item.property_iri, event.target.value)}
+                      >
+                        <option value="">-- 请选择表 --</option>
+                        {tables.map((table) => (
+                          <option key={table.name} value={table.name}>
+                            {table.name}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="field-select">
+                        <select
+                          value={item.field || ''}
+                          onChange={(event) => updateFieldSelection(item.property_iri, event.target.value)}
+                          disabled={!item.table_name}
+                        >
+                          <option value="">-- 请选择字段 --</option>
+                          {fields.map((field) => (
+                            <option key={field} value={field}>
+                              {field}
+                            </option>
+                          ))}
+                        </select>
+                        {item.field && item.table_name && (
+                          <small>
+                            已选字段：{item.field}（{item.table_name}）
+                          </small>
+                        )}
+                      </div>
+                      <span>{formatScore(item.score)}</span>
+                    </div>
+                  );
+                })}
               </div>
             ))}
-            {!matches.length && <small>完成解析后生成匹配结果。</small>}
+            {!groupedMatches.length && <small>完成解析后生成匹配结果。</small>}
           </div>
         </article>
 
@@ -456,25 +628,44 @@ export default function App() {
             <span className="tag">预览</span>
           </div>
           <div className="preview">
-            {sampleRows.length ? (
-              <table>
-                <thead>
-                  <tr>
-                    {fields.map((field) => (
-                      <th key={field}>{field}</th>
+            {tables.length ? (
+              <div className="preview-block">
+                <label>
+                  表
+                  <select
+                    value={previewTable}
+                    onChange={(event) => setPreviewTable(event.target.value)}
+                  >
+                    {tables.map((table) => (
+                      <option key={table.name} value={table.name}>
+                        {table.name}
+                      </option>
                     ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {sampleRows.map((row, index) => (
-                    <tr key={index}>
-                      {fields.map((field) => (
-                        <td key={field}>{row[field] ?? ''}</td>
+                  </select>
+                </label>
+                {previewTableInfo ? (
+                  <table>
+                    <thead>
+                      <tr>
+                        {(previewTableInfo.fields || []).map((field) => (
+                          <th key={field}>{field}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(previewTableInfo.sample_rows || []).map((row, index) => (
+                        <tr key={index}>
+                          {(previewTableInfo.fields || []).map((field) => (
+                            <td key={field}>{row[field] ?? ''}</td>
+                          ))}
+                        </tr>
                       ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                    </tbody>
+                  </table>
+                ) : (
+                  <small>暂无可预览表。</small>
+                )}
+              </div>
             ) : (
               <small>解析数据后展示样例。</small>
             )}

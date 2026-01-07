@@ -14,30 +14,62 @@ def _extract_json(text: str):
     return json.loads(match.group(0))
 
 
-def llm_match_fields(
-    fields: List[str],
+def llm_match_properties(
     properties: List[PropertyItem],
+    candidates: List,
     api_key: str,
     base_url: str,
     model: str,
+    skill_doc: str | None,
 ) -> List[dict]:
+    system_parts = [
+        "你是一个 R2RML 映射智能体。",
+        "以本体数据属性为锚点，为每个属性匹配一个最合适的表字段。",
+        "只允许使用给定的候选表名与字段名。",
+        "输出 JSON 格式：{\"matches\": [{\"property_iri\":..., \"table_name\":..., \"field\":...}]}。",
+        "如果没有合适字段，table_name 与 field 返回 null。",
+    ]
+    if skill_doc:
+        system_parts.append("以下是技能说明，请遵循：\\n" + skill_doc)
+
     prompt = {
         "role": "system",
-        "content": (
-            "You are an R2RML mapping assistant. "
-            "Map each field to the most relevant datatype property IRI. "
-            "Return JSON as {\"matches\": [{\"field\":..., \"property_iri\":...}]} "
-            "Only use provided property IRIs."
-        ),
+        "content": "\\n".join(system_parts),
     }
 
     user_payload = {
-        "fields": fields,
-        "properties": [{
-            "iri": prop.iri,
-            "label": prop.label,
-            "local_name": prop.local_name,
-        } for prop in properties],
+        "properties": [
+            {
+                "iri": prop.iri,
+                "label": prop.label,
+                "local_name": prop.local_name,
+                "domains": [
+                    {
+                        "iri": domain.iri,
+                        "label": domain.label,
+                        "local_name": domain.local_name,
+                    }
+                    for domain in prop.domains
+                ],
+                "ranges": [
+                    {
+                        "iri": item.iri,
+                        "label": item.label,
+                        "local_name": item.local_name,
+                    }
+                    for item in prop.ranges
+                ],
+            }
+            for prop in properties
+        ],
+        "candidates": [
+            {
+                "table_name": candidate.table_name,
+                "field": candidate.field,
+                "sample_values": candidate.samples[:3],
+            }
+            for candidate in candidates
+        ],
     }
 
     payload = {
