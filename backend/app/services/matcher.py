@@ -26,11 +26,13 @@ def match_properties(
     skill_doc: str | None = None,
 ) -> list[MatchItem]:
     candidates = _build_candidates(tables)
+    table_summary = _build_table_summary(tables)
+    relations = _infer_relations(table_summary)
     threshold = max(0.0, min(1.0, threshold))
 
     if mode == "llm":
         try:
-            return llm_match(properties, candidates, threshold, skill_doc)
+            return llm_match(properties, candidates, table_summary, relations, threshold, skill_doc)
         except Exception:
             return heuristic_match(properties, candidates, threshold)
 
@@ -73,6 +75,8 @@ def heuristic_match(
 def llm_match(
     properties: list[PropertyItem],
     candidates: list[FieldCandidate],
+    tables: list[dict],
+    relations: list[dict],
     threshold: float,
     skill_doc: str | None,
 ) -> list[MatchItem]:
@@ -83,7 +87,16 @@ def llm_match(
     if not api_key:
         return heuristic_match(properties, candidates, threshold)
 
-    response = llm_match_properties(properties, candidates, api_key, base_url, model, skill_doc)
+    response = llm_match_properties(
+        properties,
+        candidates,
+        tables,
+        relations,
+        api_key,
+        base_url,
+        model,
+        skill_doc,
+    )
     response_map = {item.get("property_iri"): item for item in response if item.get("property_iri")}
 
     results: list[MatchItem] = []
@@ -315,3 +328,37 @@ def _table_value(table, key: str, default):
     if isinstance(table, dict):
         return table.get(key, default)
     return getattr(table, key, default)
+
+
+def _build_table_summary(tables: list) -> list[dict]:
+    summary: list[dict] = []
+    for table in tables:
+        name = _table_value(table, "name", "")
+        fields = _table_value(table, "fields", [])
+        sample_rows = _table_value(table, "sample_rows", [])
+        summary.append(
+            {
+                "name": name,
+                "fields": fields,
+                "sample_rows": sample_rows[:3] if isinstance(sample_rows, list) else [],
+            }
+        )
+    return summary
+
+
+def _infer_relations(tables: list[dict]) -> list[dict]:
+    relations: list[dict] = []
+    for i, left in enumerate(tables):
+        left_fields = set(left.get("fields") or [])
+        for right in tables[i + 1 :]:
+            right_fields = set(right.get("fields") or [])
+            shared = sorted(left_fields & right_fields)
+            if shared:
+                relations.append(
+                    {
+                        "left_table": left.get("name"),
+                        "right_table": right.get("name"),
+                        "shared_fields": shared[:5],
+                    }
+                )
+    return relations

@@ -18,6 +18,14 @@ class PropertyItem(BaseModel):
     is_leaf: bool = True
 
 
+class ObjectPropertyItem(BaseModel):
+    iri: str
+    label: Optional[str] = None
+    local_name: Optional[str] = None
+    domains: List[IriItem] = Field(default_factory=list)
+    ranges: List[IriItem] = Field(default_factory=list)
+
+
 class TableItem(BaseModel):
     name: str
     fields: List[str] = Field(default_factory=list)

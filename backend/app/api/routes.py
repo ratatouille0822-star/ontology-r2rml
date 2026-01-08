@@ -24,8 +24,13 @@ async def version():
 async def tbox_parse(file: UploadFile = File(...)):
     try:
         content = await file.read()
-        properties = parse_tbox(content, file.filename)
-        return {"properties": [item.model_dump() for item in properties]}
+        result = parse_tbox(content, file.filename)
+        return {
+            "properties": [item.model_dump() for item in result["properties"]],
+            "classes": [item.model_dump() for item in result["classes"]],
+            "object_properties": [item.model_dump() for item in result["object_properties"]],
+            "ttl": result["ttl"],
+        }
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

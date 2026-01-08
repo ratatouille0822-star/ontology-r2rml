@@ -17,6 +17,8 @@ def _extract_json(text: str):
 def llm_match_properties(
     properties: List[PropertyItem],
     candidates: List,
+    tables: List[dict],
+    relations: List[dict],
     api_key: str,
     base_url: str,
     model: str,
@@ -24,6 +26,7 @@ def llm_match_properties(
 ) -> List[dict]:
     system_parts = [
         "你是一个 R2RML 映射智能体。",
+        "先理解数据表结构与字段之间可能的关联，再与本体数据属性进行匹配。",
         "以本体数据属性为锚点，为每个属性匹配一个最合适的表字段。",
         "只允许使用给定的候选表名与字段名。",
         "输出 JSON 格式：{\"matches\": [{\"property_iri\":..., \"table_name\":..., \"field\":...}]}。",
@@ -62,6 +65,8 @@ def llm_match_properties(
             }
             for prop in properties
         ],
+        "tables": tables,
+        "relations": relations,
         "candidates": [
             {
                 "table_name": candidate.table_name,

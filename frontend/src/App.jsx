@@ -1,7 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation } from 'd3-force';
 
-const FRONTEND_VERSION = 'v0.1.3-内测';
+const FRONTEND_VERSION = 'v0.1.4-内测';
 const emptyOutput = { format: '', content: '', filePath: '' };
+const GRAPH_WIDTH = 800;
+const GRAPH_HEIGHT = 420;
 
 const formatScore = (value) => {
   if (value === null || value === undefined) return '-';
@@ -11,6 +14,10 @@ const formatScore = (value) => {
 export default function App() {
   const [tboxFile, setTboxFile] = useState(null);
   const [tboxAllProps, setTboxAllProps] = useState([]);
+  const [tboxClasses, setTboxClasses] = useState([]);
+  const [tboxObjectProps, setTboxObjectProps] = useState([]);
+  const [tboxTtl, setTboxTtl] = useState('');
+  const [tboxView, setTboxView] = useState('graph');
   const [leafOnly, setLeafOnly] = useState(false);
   const [dataFiles, setDataFiles] = useState([]);
   const [directoryMode, setDirectoryMode] = useState(false);
@@ -28,6 +35,12 @@ export default function App() {
   const [tableName, setTableName] = useState('data_table');
   const [backendVersion, setBackendVersion] = useState('未连接');
   const [busy, setBusy] = useState(false);
+  const [graphNodes, setGraphNodes] = useState([]);
+  const [graphLinks, setGraphLinks] = useState([]);
+  const [draggingId, setDraggingId] = useState(null);
+  const simulationRef = useRef(null);
+  const nodesRef = useRef([]);
+  const svgRef = useRef(null);
 
   const fieldCount = useMemo(() => {
     const set = new Set();
@@ -76,6 +89,37 @@ export default function App() {
       })
     }));
   }, [groupedProps, matches]);
+
+  useEffect(() => {
+    const { nodes, links } = buildGraphData(tboxClasses, tboxObjectProps);
+    setGraphLinks(links);
+    setGraphNodes(nodes);
+    nodesRef.current = nodes;
+
+    if (!nodes.length) {
+      if (simulationRef.current) {
+        simulationRef.current.stop();
+      }
+      return undefined;
+    }
+
+    if (simulationRef.current) {
+      simulationRef.current.stop();
+    }
+
+    const simulation = forceSimulation(nodes)
+      .force('charge', forceManyBody().strength(-240))
+      .force('center', forceCenter(GRAPH_WIDTH / 2, GRAPH_HEIGHT / 2))
+      .force('link', forceLink(links).id((node) => node.id).distance(120))
+      .force('collide', forceCollide(28));
+
+    simulation.on('tick', () => {
+      setGraphNodes([...nodes]);
+    });
+
+    simulationRef.current = simulation;
+    return () => simulation.stop();
+  }, [tboxClasses, tboxObjectProps]);
 
   const mappingPayload = useMemo(() => {
     return matches
@@ -158,6 +202,10 @@ export default function App() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'TBox 解析失败');
       setTboxAllProps(data.properties || []);
+      setTboxClasses(data.classes || []);
+      setTboxObjectProps(data.object_properties || []);
+      setTboxTtl(data.ttl || '');
+      setTboxView('graph');
       handleStatus(`已解析 TBox：${data.properties?.length || 0} 个数据属性`);
     } catch (error) {
       handleStatus(error.message);
@@ -297,7 +345,11 @@ export default function App() {
 
   const resetAll = () => {
     setTboxFile(null);
-    setTboxProps([]);
+    setTboxAllProps([]);
+    setTboxClasses([]);
+    setTboxObjectProps([]);
+    setTboxTtl('');
+    setTboxView('graph');
     setDataFiles([]);
     setTables([]);
     setFileCount(0);
@@ -305,6 +357,39 @@ export default function App() {
     setMatches([]);
     setOutput(emptyOutput);
     setStatus('');
+  };
+
+  const handlePointerDown = (node, event) => {
+    event.preventDefault();
+    setDraggingId(node.id);
+    node.fx = node.x;
+    node.fy = node.y;
+    if (simulationRef.current) {
+      simulationRef.current.alphaTarget(0.2).restart();
+    }
+  };
+
+  const handlePointerMove = (event) => {
+    if (!draggingId || !svgRef.current) return;
+    const node = nodesRef.current.find((item) => item.id === draggingId);
+    if (!node) return;
+    const point = getSvgPoint(svgRef.current, event, GRAPH_WIDTH, GRAPH_HEIGHT);
+    node.fx = point.x;
+    node.fy = point.y;
+    setGraphNodes([...nodesRef.current]);
+  };
+
+  const handlePointerUp = () => {
+    if (!draggingId) return;
+    const node = nodesRef.current.find((item) => item.id === draggingId);
+    if (node) {
+      node.fx = null;
+      node.fy = null;
+    }
+    setDraggingId(null);
+    if (simulationRef.current) {
+      simulationRef.current.alphaTarget(0);
+    }
   };
 
   return (
@@ -376,6 +461,92 @@ export default function App() {
               </div>
             ))}
             {!groupedProps.length && <small>等待上传解析</small>}
+          </div>
+        </article>
+
+        <article className="card wide tbox-pane">
+          <div className="card-head">
+            <h2>1.5 TBox 视图</h2>
+            <div className="tab-toggle">
+              <button
+                className={tboxView === 'graph' ? 'active' : ''}
+                onClick={() => setTboxView('graph')}
+              >
+                GRAPH
+              </button>
+              <button
+                className={tboxView === 'ttl' ? 'active' : ''}
+                onClick={() => setTboxView('ttl')}
+              >
+                TBOX TTL
+              </button>
+            </div>
+          </div>
+          <div className="pane-body">
+            {tboxView === 'graph' ? (
+              <div className="graph-wrapper">
+                {graphNodes.length ? (
+                  <svg
+                    ref={svgRef}
+                    className="graph-canvas"
+                    viewBox={`0 0 ${GRAPH_WIDTH} ${GRAPH_HEIGHT}`}
+                    onPointerMove={handlePointerMove}
+                    onPointerUp={handlePointerUp}
+                    onPointerLeave={handlePointerUp}
+                  >
+                    <defs>
+                      <marker
+                        id="arrow"
+                        markerWidth="8"
+                        markerHeight="8"
+                        refX="12"
+                        refY="4"
+                        orient="auto"
+                      >
+                        <path d="M0,0 L8,4 L0,8 Z" fill="#1f3a5f" />
+                      </marker>
+                    </defs>
+                    {graphLinks.map((link) => (
+                      <g key={link.id}>
+                        <line
+                          x1={link.source.x}
+                          y1={link.source.y}
+                          x2={link.target.x}
+                          y2={link.target.y}
+                          stroke="#1f3a5f"
+                          strokeWidth="1.2"
+                          markerEnd="url(#arrow)"
+                          opacity="0.6"
+                        />
+                        <text
+                          x={(link.source.x + link.target.x) / 2}
+                          y={(link.source.y + link.target.y) / 2}
+                          className="edge-label"
+                        >
+                          {link.label}
+                        </text>
+                      </g>
+                    ))}
+                    {graphNodes.map((node) => (
+                      <g
+                        key={node.id}
+                        transform={`translate(${node.x}, ${node.y})`}
+                        onPointerDown={(event) => handlePointerDown(node, event)}
+                      >
+                        <circle r="18" fill="#ffffff" stroke="#1f3a5f" strokeWidth="1.5" />
+                        <text textAnchor="middle" className="node-label" y="4">
+                          {node.label}
+                        </text>
+                      </g>
+                    ))}
+                  </svg>
+                ) : (
+                  <small>解析 TBox 后可展示图谱。</small>
+                )}
+              </div>
+            ) : (
+              <pre className="ttl-viewer">{tboxTtl || '暂无 TBox TTL 输出。'}</pre>
+            )}
           </div>
         </article>
 
@@ -680,3 +851,59 @@ export default function App() {
     </div>
   );
 }
+
+const buildGraphData = (classes, objectProperties) => {
+  const nodes = [];
+  const nodeMap = new Map();
+
+  const addNode = (item) => {
+    if (!item || !item.iri) return;
+    if (nodeMap.has(item.iri)) return;
+    const label = item.label || item.local_name || item.iri;
+    const node = {
+      id: item.iri,
+      label,
+      x: GRAPH_WIDTH / 2 + (Math.random() - 0.5) * 120,
+      y: GRAPH_HEIGHT / 2 + (Math.random() - 0.5) * 120
+    };
+    nodeMap.set(item.iri, node);
+    nodes.push(node);
+  };
+
+  (classes || []).forEach(addNode);
+
+  const links = [];
+  (objectProperties || []).forEach((prop) => {
+    const domains = prop.domains || [];
+    const ranges = prop.ranges || [];
+    domains.forEach((domain) => addNode(domain));
+    ranges.forEach((range) => addNode(range));
+
+    domains.forEach((domain) => {
+      ranges.forEach((range) => {
+        if (!domain?.iri || !range?.iri) return;
+        const sourceNode = nodeMap.get(domain.iri);
+        const targetNode = nodeMap.get(range.iri);
+        if (!sourceNode || !targetNode) return;
+        links.push({
+          id: `${prop.iri}:${domain.iri}:${range.iri}`,
+          source: sourceNode,
+          target: targetNode,
+          label: domain.label || domain.local_name || domain.iri
+        });
+      });
+    });
+  });
+
+  return { nodes, links };
+};
+
+const getSvgPoint = (svg, event, width, height) => {
+  const rect = svg.getBoundingClientRect();
+  const scaleX = width / rect.width;
+  const scaleY = height / rect.height;
+  return {
+    x: (event.clientX - rect.left) * scaleX,
+    y: (event.clientY - rect.top) * scaleY
+  };
+};
