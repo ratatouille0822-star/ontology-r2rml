@@ -249,6 +249,18 @@ button.ghost {
   gap: 8px;
 }
 
+.tab-controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.graph-controls {
+  display: flex;
+  gap: 8px;
+}
+
 .tab-toggle button {
   background: #f2f4f7;
   color: var(--muted);
@@ -396,6 +408,12 @@ button.ghost {
 }
 
 .node-label {
+  font-size: 10px;
+  fill: #1f3a5f;
+  pointer-events: none;
+}
+
+.tooltip-label {
   font-size: 10px;
   fill: #1f3a5f;
   pointer-events: none;

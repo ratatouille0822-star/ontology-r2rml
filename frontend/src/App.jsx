@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation } from 'd3-force';
 
-const FRONTEND_VERSION = 'v0.1.4-内测';
+const FRONTEND_VERSION = 'v0.1.5-内测';
 const emptyOutput = { format: '', content: '', filePath: '' };
 const GRAPH_WIDTH = 800;
 const GRAPH_HEIGHT = 420;
@@ -38,6 +38,11 @@ export default function App() {
   const [graphNodes, setGraphNodes] = useState([]);
   const [graphLinks, setGraphLinks] = useState([]);
   const [draggingId, setDraggingId] = useState(null);
+  const [hoveredNode, setHoveredNode] = useState(null);
+  const [graphScale, setGraphScale] = useState(1);
+  const [graphOffset, setGraphOffset] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState(null);
   const simulationRef = useRef(null);
   const nodesRef = useRef([]);
   const svgRef = useRef(null);
@@ -89,6 +94,32 @@ export default function App() {
       })
     }));
   }, [groupedProps, matches]);
+
+  const dataPropsByClass = useMemo(() => {
+    const map = new Map();
+    tboxAllProps.forEach((prop) => {
+      (prop.domains || []).forEach((domain) => {
+        if (!domain?.iri) return;
+        if (!map.has(domain.iri)) {
+          map.set(domain.iri, []);
+        }
+        map.get(domain.iri).push(prop);
+      });
+    });
+    return map;
+  }, [tboxAllProps]);
+
+  const hoveredInfo = useMemo(() => {
+    if (!hoveredNode) return null;
+    const props = dataPropsByClass.get(hoveredNode) || [];
+    const labels = props
+      .map((prop) => prop.label || prop.local_name)
+      .filter(Boolean);
+    return {
+      labels: labels.slice(0, 6),
+      more: labels.length > 6 ? labels.length - 6 : 0
+    };
+  }, [hoveredNode, dataPropsByClass]);
 
   useEffect(() => {
     const { nodes, links } = buildGraphData(tboxClasses, tboxObjectProps);
@@ -369,17 +400,59 @@ export default function App() {
     }
   };
 
+  const handleCanvasPointerDown = (event) => {
+    if (event.button !== 0) return;
+    if (event.target.closest('[data-node=\"true\"]')) return;
+    if (!svgRef.current) return;
+    const { svgX, svgY } = getSvgCoordinates(
+      svgRef.current,
+      event,
+      GRAPH_WIDTH,
+      GRAPH_HEIGHT
+    );
+    setIsPanning(true);
+    setPanStart({
+      x: svgX,
+      y: svgY,
+      offsetX: graphOffset.x,
+      offsetY: graphOffset.y
+    });
+  };
+
   const handlePointerMove = (event) => {
+    if (isPanning && panStart && svgRef.current) {
+      const { svgX, svgY } = getSvgCoordinates(
+        svgRef.current,
+        event,
+        GRAPH_WIDTH,
+        GRAPH_HEIGHT
+      );
+      const dx = svgX - panStart.x;
+      const dy = svgY - panStart.y;
+      setGraphOffset({ x: panStart.offsetX + dx, y: panStart.offsetY + dy });
+      return;
+    }
     if (!draggingId || !svgRef.current) return;
     const node = nodesRef.current.find((item) => item.id === draggingId);
     if (!node) return;
-    const point = getSvgPoint(svgRef.current, event, GRAPH_WIDTH, GRAPH_HEIGHT);
+    const point = getSvgPoint(
+      svgRef.current,
+      event,
+      GRAPH_WIDTH,
+      GRAPH_HEIGHT,
+      graphScale,
+      graphOffset
+    );
     node.fx = point.x;
     node.fy = point.y;
     setGraphNodes([...nodesRef.current]);
   };
 
   const handlePointerUp = () => {
+    if (isPanning) {
+      setIsPanning(false);
+      setPanStart(null);
+    }
     if (!draggingId) return;
     const node = nodesRef.current.find((item) => item.id === draggingId);
     if (node) {
@@ -390,6 +463,52 @@ export default function App() {
     if (simulationRef.current) {
       simulationRef.current.alphaTarget(0);
     }
+  };
+
+  const handleWheel = (event) => {
+    event.preventDefault();
+    if (!svgRef.current) return;
+    const { svgX, svgY } = getSvgCoordinates(
+      svgRef.current,
+      event,
+      GRAPH_WIDTH,
+      GRAPH_HEIGHT
+    );
+    const graphX = (svgX - graphOffset.x) / graphScale;
+    const graphY = (svgY - graphOffset.y) / graphScale;
+    const nextScale = clamp(graphScale * (event.deltaY > 0 ? 0.92 : 1.08), 0.5, 2.5);
+    const nextOffset = {
+      x: svgX - graphX * nextScale,
+      y: svgY - graphY * nextScale
+    };
+    setGraphScale(nextScale);
+    setGraphOffset(nextOffset);
+  };
+
+  const handleCenter = () => {
+    const nodes = nodesRef.current;
+    if (!nodes.length) {
+      setGraphScale(1);
+      setGraphOffset({ x: 0, y: 0 });
+      return;
+    }
+    const sum = nodes.reduce(
+      (acc, node) => {
+        return { x: acc.x + node.x, y: acc.y + node.y };
+      },
+      { x: 0, y: 0 }
+    );
+    const center = { x: sum.x / nodes.length, y: sum.y / nodes.length };
+    setGraphScale(1);
+    setGraphOffset({ x: GRAPH_WIDTH / 2 - center.x, y: GRAPH_HEIGHT / 2 - center.y });
+  };
+
+  const handleZoomIn = () => {
+    setGraphScale((value) => clamp(value * 1.12, 0.5, 2.5));
+  };
+
+  const handleZoomOut = () => {
+    setGraphScale((value) => clamp(value * 0.9, 0.5, 2.5));
   };
 
   return (
@@ -467,19 +586,34 @@ export default function App() {
         <article className="card wide tbox-pane">
           <div className="card-head">
             <h2>1.5 TBox 视图</h2>
-            <div className="tab-toggle">
-              <button
-                className={tboxView === 'graph' ? 'active' : ''}
-                onClick={() => setTboxView('graph')}
-              >
-                GRAPH
-              </button>
-              <button
-                className={tboxView === 'ttl' ? 'active' : ''}
-                onClick={() => setTboxView('ttl')}
-              >
-                TBOX TTL
-              </button>
+            <div className="tab-controls">
+              <div className="tab-toggle">
+                <button
+                  className={tboxView === 'graph' ? 'active' : ''}
+                  onClick={() => setTboxView('graph')}
+                >
+                  GRAPH
+                </button>
+                <button
+                  className={tboxView === 'ttl' ? 'active' : ''}
+                  onClick={() => setTboxView('ttl')}
+                >
+                  TBOX TTL
+                </button>
+              </div>
+              {tboxView === 'graph' && (
+                <div className="graph-controls">
+                  <button className="ghost" onClick={handleZoomOut}>
+                    缩小
+                  </button>
+                  <button className="ghost" onClick={handleZoomIn}>
+                    放大
+                  </button>
+                  <button className="ghost" onClick={handleCenter}>
+                    居中
+                  </button>
+                </div>
+              )}
             </div>
           </div>
           <div className="pane-body">
@@ -490,9 +624,11 @@ export default function App() {
                     ref={svgRef}
                     className="graph-canvas"
                     viewBox={`0 0 ${GRAPH_WIDTH} ${GRAPH_HEIGHT}`}
+                    onPointerDown={handleCanvasPointerDown}
                     onPointerMove={handlePointerMove}
                     onPointerUp={handlePointerUp}
                     onPointerLeave={handlePointerUp}
+                    onWheel={handleWheel}
                   >
                     <defs>
                       <marker
@@ -506,39 +642,86 @@ export default function App() {
                         <path d="M0,0 L8,4 L0,8 Z" fill="#1f3a5f" />
                       </marker>
                     </defs>
-                    {graphLinks.map((link) => (
-                      <g key={link.id}>
-                        <line
-                          x1={link.source.x}
-                          y1={link.source.y}
-                          x2={link.target.x}
-                          y2={link.target.y}
-                          stroke="#1f3a5f"
-                          strokeWidth="1.2"
-                          markerEnd="url(#arrow)"
-                          opacity="0.6"
-                        />
-                        <text
-                          x={(link.source.x + link.target.x) / 2}
-                          y={(link.source.y + link.target.y) / 2}
-                          className="edge-label"
+                    <g transform={`translate(${graphOffset.x} ${graphOffset.y}) scale(${graphScale})`}>
+                      {graphLinks.map((link) => (
+                        <g key={link.id}>
+                          <line
+                            x1={link.source.x}
+                            y1={link.source.y}
+                            x2={link.target.x}
+                            y2={link.target.y}
+                            stroke="#1f3a5f"
+                            strokeWidth="1.2"
+                            markerEnd="url(#arrow)"
+                            opacity="0.6"
+                          />
+                          <text
+                            x={(link.source.x + link.target.x) / 2}
+                            y={(link.source.y + link.target.y) / 2}
+                            className="edge-label"
+                          >
+                            {link.label}
+                          </text>
+                        </g>
+                      ))}
+                      {graphNodes.map((node) => (
+                        <g
+                          key={node.id}
+                          data-node="true"
+                          transform={`translate(${node.x}, ${node.y})`}
+                          onPointerDown={(event) => handlePointerDown(node, event)}
+                          onMouseEnter={() => setHoveredNode(node.id)}
+                          onMouseLeave={() => setHoveredNode(null)}
                         >
-                          {link.label}
-                        </text>
-                      </g>
-                    ))}
-                    {graphNodes.map((node) => (
-                      <g
-                        key={node.id}
-                        transform={`translate(${node.x}, ${node.y})`}
-                        onPointerDown={(event) => handlePointerDown(node, event)}
-                      >
-                        <circle r="18" fill="#ffffff" stroke="#1f3a5f" strokeWidth="1.5" />
-                        <text textAnchor="middle" className="node-label" y="4">
-                          {node.label}
-                        </text>
-                      </g>
-                    ))}
+                          <circle r="18" fill="#ffffff" stroke="#1f3a5f" strokeWidth="1.5" />
+                          <text textAnchor="middle" className="node-label" y="4">
+                            {node.label}
+                          </text>
+                        </g>
+                      ))}
+                      {hoveredInfo && (() => {
+                        const node = graphNodes.find((item) => item.id === hoveredNode);
+                        if (!node) return null;
+                        const lines = hoveredInfo.labels;
+                        const hasMore = hoveredInfo.more > 0;
+                        const lineHeight = 12;
+                        const padding = 6;
+                        const height =
+                          padding * 2 + lineHeight * (lines.length + (hasMore ? 1 : 0));
+                        const width = 160;
+                        return (
+                          <g transform={`translate(${node.x + 24}, ${node.y - 12})`}>
+                            <rect
+                              width={width}
+                              height={height}
+                              rx="6"
+                              fill="#ffffff"
+                              stroke="#1f3a5f"
+                              strokeWidth="0.8"
+                            />
+                            {lines.map((line, index) => (
+                              <text
+                                key={line + index}
+                                x={padding}
+                                y={padding + lineHeight * (index + 1)}
+                                className="tooltip-label"
+                              >
+                                {line}
+                              </text>
+                            ))}
+                            {hasMore && (
+                              <text
+                                x={padding}
+                                y={padding + lineHeight * (lines.length + 1)}
+                                className="tooltip-label"
+                              >
+                                还有 {hoveredInfo.more} 个属性
+                              </text>
+                            )}
+                          </g>
+                        );
+                      })()}
+                    </g>
                   </svg>
                 ) : (
                   <small>解析 TBox 后可展示图谱。</small>
@@ -859,7 +1042,7 @@ const buildGraphData = (classes, objectProperties) => {
   const addNode = (item) => {
     if (!item || !item.iri) return;
     if (nodeMap.has(item.iri)) return;
-    const label = item.label || item.local_name || item.iri;
+    const label = item.label || item.local_name || shortLabel(item.iri);
     const node = {
       id: item.iri,
       label,
@@ -879,6 +1062,7 @@ const buildGraphData = (classes, objectProperties) => {
     domains.forEach((domain) => addNode(domain));
     ranges.forEach((range) => addNode(range));
 
+    const edgeLabel = prop.label || prop.local_name || shortLabel(prop.iri);
     domains.forEach((domain) => {
       ranges.forEach((range) => {
         if (!domain?.iri || !range?.iri) return;
@@ -889,7 +1073,7 @@ const buildGraphData = (classes, objectProperties) => {
           id: `${prop.iri}:${domain.iri}:${range.iri}`,
           source: sourceNode,
           target: targetNode,
-          label: domain.label || domain.local_name || domain.iri
+          label: edgeLabel
         });
       });
     });
@@ -898,12 +1082,28 @@ const buildGraphData = (classes, objectProperties) => {
   return { nodes, links };
 };
 
-const getSvgPoint = (svg, event, width, height) => {
+const getSvgPoint = (svg, event, width, height, scale, offset) => {
+  const { svgX, svgY } = getSvgCoordinates(svg, event, width, height);
+  return {
+    x: (svgX - offset.x) / scale,
+    y: (svgY - offset.y) / scale
+  };
+};
+
+const getSvgCoordinates = (svg, event, width, height) => {
   const rect = svg.getBoundingClientRect();
   const scaleX = width / rect.width;
   const scaleY = height / rect.height;
   return {
-    x: (event.clientX - rect.left) * scaleX,
-    y: (event.clientY - rect.top) * scaleY
+    svgX: (event.clientX - rect.left) * scaleX,
+    svgY: (event.clientY - rect.top) * scaleY
   };
+};
+
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+const shortLabel = (iri) => {
+  if (!iri) return '';
+  if (iri.includes('#')) return iri.split('#').pop();
+  return iri.split('/').pop();
 };
