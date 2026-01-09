@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation } from 'd3-force';
 
-const FRONTEND_VERSION = 'v0.1.5-内测';
+const FRONTEND_VERSION = 'v0.1.6-内测';
 const emptyOutput = { format: '', content: '', filePath: '' };
 const GRAPH_WIDTH = 800;
 const GRAPH_HEIGHT = 420;

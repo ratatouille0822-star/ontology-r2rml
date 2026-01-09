@@ -3,12 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Iterable
+import logging
 import re
 
 from app.models.schemas import MatchItem, PropertyItem
 from app.services.llm_client import llm_match_properties
 from app.utils.config import get_setting
+from app.utils.match_logger import append_match_logs
 from app.utils.text import normalize_text
+
+logger = logging.getLogger(__name__)
+
+LLM_BATCH_SIZE = 10
 
 
 @dataclass
@@ -25,28 +31,54 @@ def match_properties(
     threshold: float,
     skill_doc: str | None = None,
 ) -> list[MatchItem]:
+    logger.info("开始匹配：mode=%s，属性数=%d，表数=%d，阈值=%.2f", mode, len(properties), len(tables), threshold)
     candidates = _build_candidates(tables)
     table_summary = _build_table_summary(tables)
     relations = _infer_relations(table_summary)
+    logger.info(
+        "已解析候选字段：候选数=%d，关系数=%d",
+        len(candidates),
+        len(relations),
+    )
     threshold = max(0.0, min(1.0, threshold))
 
     if mode == "llm":
+        logger.info("进入 LLM 匹配流程")
         try:
             return llm_match(properties, candidates, table_summary, relations, threshold, skill_doc)
-        except Exception:
-            return heuristic_match(properties, candidates, threshold)
+        except Exception as exc:
+            logger.error("LLM 匹配失败，准备记录失败日志")
+            log_entries = []
+            reason = str(exc)
+            for prop in properties:
+                log_entries.append(
+                    {
+                        "level": "ERROR",
+                        "property_label": prop.label or prop.local_name or prop.iri,
+                        "group_name": _group_name_for_property(prop),
+                        "field": "-",
+                        "result": "匹配失败",
+                        "reason": reason,
+                    }
+                )
+            append_match_logs(log_entries)
+            raise
 
-    return heuristic_match(properties, candidates, threshold)
+    logger.info("进入启发式匹配流程")
+    return heuristic_match(properties, candidates, table_summary, threshold)
 
 
 def heuristic_match(
     properties: list[PropertyItem],
     candidates: list[FieldCandidate],
+    tables: list[dict],
     threshold: float,
 ) -> list[MatchItem]:
     results: list[MatchItem] = []
+    log_entries: list[dict] = []
     for prop in properties:
-        best = _best_candidate(prop, candidates)
+        scoped = _select_candidates_for_property(prop, candidates, tables)
+        best = _best_candidate(prop, scoped)
         score = best[1] if best else 0.0
         if best and score >= threshold:
             candidate = best[0]
@@ -59,6 +91,7 @@ def heuristic_match(
                     score=round(score, 4),
                 )
             )
+            reason = "启发式匹配"
         else:
             results.append(
                 MatchItem(
@@ -69,6 +102,23 @@ def heuristic_match(
                     score=round(score, 4) if score else None,
                 )
             )
+            if best:
+                reason = "启发式匹配但置信度低于阈值"
+            else:
+                reason = "启发式未找到匹配"
+            candidate = best[0] if best else None
+
+        log_entries.append(
+            {
+                "level": "INFO",
+                "property_label": prop.label or prop.local_name or prop.iri,
+                "group_name": _group_name_for_property(prop),
+                "field": candidate.field if candidate else "-",
+                "result": "匹配成功" if best and score >= threshold else "匹配失败",
+                "reason": reason,
+            }
+        )
+    append_match_logs(log_entries)
     return results
 
 
@@ -85,32 +135,72 @@ def llm_match(
     model = get_setting("QWEN_MODEL", "qwen-plus")
 
     if not api_key:
-        return heuristic_match(properties, candidates, threshold)
+        raise RuntimeError("QWEN_API_KEY 未配置，无法进行 LLM 匹配。")
 
-    response = llm_match_properties(
-        properties,
-        candidates,
-        tables,
-        relations,
-        api_key,
-        base_url,
+    total_batches = (len(properties) + LLM_BATCH_SIZE - 1) // LLM_BATCH_SIZE
+    logger.info(
+        "准备分批调用 LLM：批大小=%d，总批次=%d，模型=%s",
+        LLM_BATCH_SIZE,
+        total_batches,
         model,
-        skill_doc,
     )
-    response_map = {item.get("property_iri"): item for item in response if item.get("property_iri")}
+    response_map: dict[str, dict] = {}
+    for index in range(total_batches):
+        batch = properties[index * LLM_BATCH_SIZE : (index + 1) * LLM_BATCH_SIZE]
+        logger.info(
+            "调用 LLM 批次 %d/%d：属性数=%d",
+            index + 1,
+            total_batches,
+            len(batch),
+        )
+        response = llm_match_properties(
+            batch,
+            candidates,
+            tables,
+            relations,
+            api_key,
+            base_url,
+            model,
+            skill_doc,
+        )
+        logger.info("LLM 批次 %d/%d 返回条目数=%d", index + 1, total_batches, len(response))
+        for item in response:
+            property_iri = item.get("property_iri")
+            if property_iri:
+                response_map[property_iri] = item
 
     results: list[MatchItem] = []
+    log_entries: list[dict] = []
     for prop in properties:
         item = response_map.get(prop.iri)
+        llm_confidence = _extract_llm_confidence(item)
+        explicit_null = (
+            item is not None
+            and item.get("table_name") is None
+            and item.get("field") is None
+        )
         candidate = None
-        if item:
+        if item and not explicit_null:
             candidate = _candidate_from_response(item, candidates)
         if candidate:
             score = _score_candidate(prop, candidate)
+            score_source = "local"
+        elif explicit_null:
+            score = llm_confidence or 0.0
+            score_source = "llm"
+        elif item is not None:
+            score = llm_confidence or 0.0
+            score_source = "llm"
         else:
-            best = _best_candidate(prop, candidates)
+            scoped = _select_candidates_for_property(prop, candidates, tables)
+            best = _best_candidate(prop, scoped)
             candidate = best[0] if best else None
             score = best[1] if best else 0.0
+            score_source = "local"
+
+        if llm_confidence is not None:
+            score = llm_confidence
+            score_source = "llm"
 
         if candidate and score >= threshold:
             results.append(
@@ -122,6 +212,7 @@ def llm_match(
                     score=round(score, 4),
                 )
             )
+            result = "匹配成功"
         else:
             results.append(
                 MatchItem(
@@ -132,8 +223,59 @@ def llm_match(
                     score=round(score, 4) if score else None,
                 )
             )
+            result = "匹配失败"
 
+        reason = None
+        if item:
+            reason = item.get("reason")
+        if not reason:
+            if item is None:
+                reason = "LLM 未返回该属性匹配结果"
+            elif explicit_null:
+                reason = "LLM 判定无合适字段"
+            else:
+                reason = "LLM 未返回匹配原因"
+        if item is not None and not explicit_null and candidate is None:
+            reason = f"{reason}；LLM 返回字段不在候选列表"
+        if candidate and score < threshold:
+            reason = f"{reason}；置信度低于阈值"
+        if score_source == "llm" and llm_confidence is not None:
+            reason = f"{reason}；LLM置信度={llm_confidence:.2f}"
+        elif score_source == "local":
+            reason = f"{reason}；使用本地评分"
+
+        log_entries.append(
+            {
+                "level": "INFO",
+                "property_label": prop.label or prop.local_name or prop.iri,
+                "group_name": _group_name_for_property(prop),
+                "field": candidate.field if candidate else "-",
+                "result": result,
+                "reason": reason,
+            }
+        )
+
+    append_match_logs(log_entries)
     return results
+
+
+def _extract_llm_confidence(item: dict | None) -> float | None:
+    if not item:
+        return None
+    value = item.get("confidence")
+    if value is None:
+        value = item.get("score")
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return None
+    if confidence > 1 and confidence <= 100:
+        confidence = confidence / 100
+    if confidence < 0:
+        return None
+    if confidence > 1:
+        confidence = 1.0
+    return round(confidence, 4)
 
 
 def _candidate_from_response(item: dict, candidates: list[FieldCandidate]) -> FieldCandidate | None:
@@ -163,6 +305,17 @@ def _best_candidate(
     if not best_candidate:
         return None
     return best_candidate, best_score
+
+
+def _select_candidates_for_property(
+    prop: PropertyItem,
+    candidates: list[FieldCandidate],
+    tables: list[dict],
+) -> list[FieldCandidate]:
+    preferred_tables = _rank_tables_for_property(prop, tables)
+    if not preferred_tables:
+        return candidates
+    return [item for item in candidates if item.table_name in preferred_tables]
 
 
 def _score_candidate(prop: PropertyItem, candidate: FieldCandidate) -> float:
@@ -328,6 +481,31 @@ def _table_value(table, key: str, default):
     if isinstance(table, dict):
         return table.get(key, default)
     return getattr(table, key, default)
+
+
+def _group_name_for_property(prop: PropertyItem) -> str:
+    if prop.domains:
+        domain = prop.domains[0]
+        return domain.label or domain.local_name or domain.iri
+    return "未分群"
+
+
+def _rank_tables_for_property(prop: PropertyItem, tables: list[dict]) -> list[str]:
+    if not tables or not prop.domains:
+        return []
+    scored: list[tuple[str, float]] = []
+    for table in tables:
+        name = table.get("name") or ""
+        if not name:
+            continue
+        scored.append((name, _domain_similarity(name, prop.domains)))
+    if not scored:
+        return []
+    scored.sort(key=lambda item: item[1], reverse=True)
+    selected = [name for name, score in scored if score >= 0.35]
+    if not selected:
+        selected = [scored[0][0]]
+    return selected[:3]
 
 
 def _build_table_summary(tables: list) -> list[dict]:

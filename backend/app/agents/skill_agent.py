@@ -10,11 +10,14 @@ class SkillAgent:
         self.skill_name = skill_name
         self.skill_root = skill_root or Path(__file__).resolve().parents[3] / "SKILLS"
         self._skill_doc: str | None = None
+        self._skill_doc_mtime: float | None = None
 
     def _load_skill_doc(self) -> str:
-        if self._skill_doc is None:
-            skill_path = self.skill_root / self.skill_name / "SKILL.md"
+        skill_path = self.skill_root / self.skill_name / "SKILL.md"
+        mtime = skill_path.stat().st_mtime
+        if self._skill_doc is None or self._skill_doc_mtime != mtime:
             self._skill_doc = skill_path.read_text(encoding="utf-8")
+            self._skill_doc_mtime = mtime
         return self._skill_doc
 
     def match(self, properties, tables, mode: str, threshold: float):

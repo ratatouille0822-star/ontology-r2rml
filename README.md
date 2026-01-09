@@ -42,3 +42,4 @@ docker compose up -d
 - TBox 属性按类分组展示与匹配，后端日志含时间戳。
 - TBox 视图支持 Graph 可视化与 TTL 展示。
 - Graph 支持缩放、平移、居中操作，边上显示 object property 名称，节点悬停展示 data property。
+- 匹配策略调整为先类名对表名，再属性对字段名。

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import logging
+
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from app.agents.r2rml_agent import R2RMLAgent
@@ -13,6 +15,7 @@ from app.utils.version import BACKEND_VERSION
 
 router = APIRouter()
 agent = R2RMLAgent()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/version")
@@ -55,8 +58,12 @@ async def data_parse(files: list[UploadFile] = File(...)):
 
 @router.post("/match", response_model=MatchResponse)
 async def match_fields(payload: MatchRequest):
-    matches = agent.match(payload.properties, payload.tables, payload.mode, payload.threshold)
-    return MatchResponse(matches=matches)
+    try:
+        matches = agent.match(payload.properties, payload.tables, payload.mode, payload.threshold)
+        return MatchResponse(matches=matches)
+    except Exception as exc:
+        logger.exception("匹配失败")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/abox")

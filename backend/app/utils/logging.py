@@ -8,11 +8,11 @@ def configure_logging() -> None:
         "disable_existing_loggers": False,
         "formatters": {
             "default": {
-                "format": "%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+                "format": "%(levelname)s：%(asctime)s %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S",
             },
             "access": {
-                "format": "%(asctime)s | %(message)s",
+                "format": "%(levelname)s：%(asctime)s %(message)s",
                 "datefmt": "%Y-%m-%d %H:%M:%S",
             },
         },
