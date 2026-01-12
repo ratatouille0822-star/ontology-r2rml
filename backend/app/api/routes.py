@@ -1,20 +1,13 @@
-from pathlib import Path
-
 import logging
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from app.agents.r2rml_agent import R2RMLAgent
+from app.agents.skill_dispatcher import SkillDispatcher
 from app.models.schemas import AboxRequest, MatchRequest, MatchResponse, R2RmlRequest
-from app.services.abox_generator import generate_abox
-from app.services.data_source import parse_tabular_files
-from app.services.r2rml_generator import generate_r2rml
-from app.services.tbox_parser import parse_tbox
-from app.utils.config import get_setting
 from app.utils.version import BACKEND_VERSION
 
 router = APIRouter()
-agent = R2RMLAgent()
+dispatcher = SkillDispatcher()
 logger = logging.getLogger(__name__)
 
 
@@ -27,13 +20,8 @@ async def version():
 async def tbox_parse(file: UploadFile = File(...)):
     try:
         content = await file.read()
-        result = parse_tbox(content, file.filename)
-        return {
-            "properties": [item.model_dump() for item in result["properties"]],
-            "classes": [item.model_dump() for item in result["classes"]],
-            "object_properties": [item.model_dump() for item in result["object_properties"]],
-            "ttl": result["ttl"],
-        }
+        result = await dispatcher.parse_tbox(content, file.filename)
+        return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -46,12 +34,7 @@ async def data_parse(files: list[UploadFile] = File(...)):
             content = await file.read()
             file_items.append((file.filename or "", content))
 
-        tables = parse_tabular_files(file_items)
-        return {
-            "tables": tables,
-            "file_count": len(files),
-            "table_count": len(tables),
-        }
+        return await dispatcher.parse_data(file_items)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -59,7 +42,7 @@ async def data_parse(files: list[UploadFile] = File(...)):
 @router.post("/match", response_model=MatchResponse)
 async def match_fields(payload: MatchRequest):
     try:
-        matches = agent.match(payload.properties, payload.tables, payload.mode, payload.threshold)
+        matches = await dispatcher.match(payload.properties, payload.tables, payload.mode, payload.threshold)
         return MatchResponse(matches=matches)
     except Exception as exc:
         logger.exception("匹配失败")
@@ -69,10 +52,12 @@ async def match_fields(payload: MatchRequest):
 @router.post("/abox")
 async def abox_generate(payload: AboxRequest):
     try:
-        data_dir = get_setting("DATA_DIR", "./data")
-        output_dir = str(Path(data_dir) / "abox")
-        content, file_path = generate_abox(payload.tables, payload.mapping, payload.base_iri, output_dir)
-        return {"format": "turtle", "content": content, "file_path": file_path}
+        result = await dispatcher.generate_abox(
+            payload.tables,
+            payload.mapping,
+            payload.base_iri,
+        )
+        return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -80,8 +65,8 @@ async def abox_generate(payload: AboxRequest):
 @router.post("/r2rml")
 async def r2rml_generate(payload: R2RmlRequest):
     try:
-        content = generate_r2rml(payload.mapping, payload.table_name, payload.base_iri)
-        return {"format": "turtle", "content": content}
+        result = await dispatcher.generate_r2rml(payload.mapping, payload.table_name, payload.base_iri)
+        return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

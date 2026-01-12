@@ -22,3 +22,4 @@ cp ../.env.example .env
 ## 配置
 - 参考 `../.env.example`。
 - 在 `backend/.env` 中配置 Qwen API Key。
+- Optional: set `QWEN_MODEL_CANDIDATES` and `QWEN_ROUTER_MODEL` for LLM model routing

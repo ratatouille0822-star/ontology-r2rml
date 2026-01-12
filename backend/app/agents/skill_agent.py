@@ -1,24 +1,16 @@
-from pathlib import Path
-
+from app.agents.skill_registry import SkillRegistry, get_skill_registry
 from app.skills.r2rml_skill import run_matching
 
 
 class SkillAgent:
     """通用智能体：按需加载 SKILL.md 并执行对应技能。"""
 
-    def __init__(self, skill_name: str, skill_root: Path | None = None):
+    def __init__(self, skill_name: str, registry: SkillRegistry | None = None):
         self.skill_name = skill_name
-        self.skill_root = skill_root or Path(__file__).resolve().parents[3] / "SKILLS"
-        self._skill_doc: str | None = None
-        self._skill_doc_mtime: float | None = None
+        self.registry = registry or get_skill_registry()
 
     def _load_skill_doc(self) -> str:
-        skill_path = self.skill_root / self.skill_name / "SKILL.md"
-        mtime = skill_path.stat().st_mtime
-        if self._skill_doc is None or self._skill_doc_mtime != mtime:
-            self._skill_doc = skill_path.read_text(encoding="utf-8")
-            self._skill_doc_mtime = mtime
-        return self._skill_doc
+        return self.registry.get_skill_doc(self.skill_name)
 
     def match(self, properties, tables, mode: str, threshold: float):
         skill_doc = self._load_skill_doc()

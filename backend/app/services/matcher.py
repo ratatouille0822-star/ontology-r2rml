@@ -7,7 +7,8 @@ import logging
 import re
 
 from app.models.schemas import MatchItem, PropertyItem
-from app.services.llm_client import llm_match_properties
+from app.agents.skill_registry import get_skill_registry
+from app.services.llm_client import llm_match_properties, select_llm_model
 from app.utils.config import get_setting
 from app.utils.match_logger import append_match_logs
 from app.utils.text import normalize_text
@@ -132,10 +133,27 @@ def llm_match(
 ) -> list[MatchItem]:
     api_key = get_setting("QWEN_API_KEY")
     base_url = get_setting("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-    model = get_setting("QWEN_MODEL", "qwen-plus")
+    default_model = get_setting("QWEN_MODEL", "qwen-plus")
 
     if not api_key:
         raise RuntimeError("QWEN_API_KEY 未配置，无法进行 LLM 匹配。")
+
+    model_select_doc = None
+    try:
+        model_select_doc = get_skill_registry().get_skill_doc("model-select")
+    except Exception as exc:
+        logger.warning("Model selection skill unavailable: %s", exc)
+
+    model = select_llm_model(
+        properties,
+        candidates,
+        tables,
+        relations,
+        default_model,
+        api_key,
+        base_url,
+        model_select_doc,
+    )
 
     total_batches = (len(properties) + LLM_BATCH_SIZE - 1) // LLM_BATCH_SIZE
     logger.info(
